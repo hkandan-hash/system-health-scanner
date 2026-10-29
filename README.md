@@ -1,13 +1,13 @@
 # system-health-scanner
 
-A small, read-only tool that checks whether a Windows machine and its apps are up and running, then writes an HTML report and serves a local dashboard.
+A small tool that checks whether a Windows machine and its apps are up and running, then writes an HTML report and serves a local dashboard.
 
 - **Health:** CPU, memory and disk usage against limits you set
 - **Apps intact:** Windows services, processes, TCP ports and HTTP endpoints, each reported UP or DOWN
 - **Report:** overall status, what to fix first (by severity), changes since the last scan, and all checks
 - **Automation-friendly:** exit code 0 means everything is UP, 1 means something is DOWN
 
-It's a single Python file with one dependency (PyYAML). It works offline, uses no AI and has no paid services. It only reads system state and never changes it.
+It's a single Python file with one dependency (PyYAML). It works offline, uses no AI and has no paid services. `sysscan.py` only reads system state. `sysfix.py` changes things only when you run it with `--apply`.
 
 ## Requirements
 
