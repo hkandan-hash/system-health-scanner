@@ -19,9 +19,8 @@ from pathlib import Path
 
 import yaml
 
-HERE = Path(__file__).resolve().parent
-RESULTS = HERE / "results"
-SEV_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+import sysscan
+from sysscan import HERE, NO_WINDOW, RESULTS, SEV_ORDER
 
 
 def latest_scan():
@@ -65,11 +64,12 @@ def show(cmd):
     return cmd[-1] if cmd[0] == "powershell" else " ".join(cmd)
 
 
-def main():
+def main(argv=None):
+    """Returns 0 if everything is UP afterwards (or nothing to fix), else 1."""
     ap = argparse.ArgumentParser(description="Fix what the latest sysscan report shows as DOWN.")
     ap.add_argument("--apply", action="store_true", help="actually run the fixes")
     ap.add_argument("--config", default=str(HERE / "apps.yml"))
-    a = ap.parse_args()
+    a = ap.parse_args(argv)
 
     scan = latest_scan()
     todo, manual = plan(scan, fixes_from_config(a.config))
@@ -79,15 +79,16 @@ def main():
     for c in manual:
         print(f"  MANUAL  {c['name']:28} -> {c['fix']}")
     if not todo:
-        sys.exit(0 if not manual else 1)
+        return 0 if not manual else 1
     if not a.apply:
         print("\nDry run, nothing changed. Re-run with --apply to fix.")
-        return
+        return 1
 
     log = RESULTS / "fixes.log"
     for c, cmd, _ in todo:
         try:
-            r = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=120, cwd=HERE)
+            r = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=120, cwd=HERE,
+                               creationflags=NO_WINDOW)
             ok, out = r.returncode == 0, (r.stdout + r.stderr).strip()
         except (OSError, subprocess.TimeoutExpired) as e:
             ok, out = False, str(e)
@@ -97,10 +98,9 @@ def main():
                                 "cmd": show(cmd), "ok": ok, "output": out[-500:]}) + "\n")
 
     time.sleep(max(w for _, _, w in todo))
-    print("\nRe-scanning to verify...", flush=True)
-    r = subprocess.run([sys.executable, str(HERE / "sysscan.py"), "scan", "--config", a.config])
-    sys.exit(r.returncode)
+    print("\nRe-scanning to verify...")
+    return sysscan.run_scan(a.config)
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

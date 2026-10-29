@@ -6,9 +6,11 @@ Usage:
   python sysscan.py dashboard [--interval 60] [--port 8765]
 """
 import argparse
+import contextlib
 import ctypes
 import datetime as dt
 import html
+import io
 import json
 import secrets
 import shutil
@@ -25,7 +27,9 @@ from urllib.parse import parse_qs
 
 import yaml
 
-HERE = Path(__file__).resolve().parent
+# In the packaged .exe, config and results live next to the .exe.
+HERE = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)  # no console pop-ups from the desktop app
 RESULTS = HERE / "results"
 REPORT = RESULTS / "report.html"
 KEEP_SCANS = 1500  # about 24 h of history at the dashboard's 60 s interval
@@ -50,7 +54,7 @@ class _MemStatus(ctypes.Structure):
 def ps_snapshot():
     out = subprocess.run(
         ["powershell", "-NoProfile", "-NonInteractive", "-Command", PS_SNAPSHOT],
-        capture_output=True, text=True, encoding="utf-8", timeout=90,
+        capture_output=True, text=True, encoding="utf-8", timeout=90, creationflags=NO_WINDOW,
     )
     if out.returncode != 0:
         raise RuntimeError(out.stderr.strip()[:300] or "PowerShell failed")
@@ -251,13 +255,24 @@ def load_cfg(path):
     return yaml.safe_load(Path(path).read_text(encoding="utf-8")) or {}
 
 
-def main():
+def run_scan(config):
+    """Scan, write the report, print one line per check. Returns 0 if everything is UP, else 1."""
+    cur = scan(load_cfg(config))
+    _, prev = saved_scans()
+    REPORT.write_text(render(cur, prev), encoding="utf-8")
+    for c in cur["checks"]:
+        print(f"{c['status']:8} {c['name']:30} {c['detail']}")
+    print(f"Report: {REPORT}")
+    return 0 if all(c["status"] == "UP" for c in cur["checks"]) else 1
+
+
+def main(argv=None):
     ap = argparse.ArgumentParser(description="Check that this machine and its apps are up.")
     ap.add_argument("command", choices=["scan", "report", "dashboard"])
     ap.add_argument("--config", default=str(HERE / "apps.yml"))
     ap.add_argument("--interval", type=int, default=60, help="dashboard: seconds between scans")
     ap.add_argument("--port", type=int, default=8765, help="dashboard: local port")
-    a = ap.parse_args()
+    a = ap.parse_args(argv)
 
     if a.command == "report":
         cur, prev = saved_scans()
@@ -267,18 +282,12 @@ def main():
         print(f"Report: {REPORT}")
         return
 
-    cfg = load_cfg(a.config)
     if a.command == "scan":
-        cur = scan(cfg)
-        _, prev = saved_scans()
-        REPORT.write_text(render(cur, prev), encoding="utf-8")
-        for c in cur["checks"]:
-            print(f"{c['status']:8} {c['name']:30} {c['detail']}")
-        print(f"Report: {REPORT}")
-        sys.exit(0 if all(c["status"] == "UP" for c in cur["checks"]) else 1)
+        sys.exit(run_scan(a.config))
 
     # dashboard: rescan in the background, serve the latest report on localhost only
-    page = {"html": "<p>First scan running...</p>", "fix": None}
+    page = {"html": '<meta http-equiv="refresh" content="2"><p style="font:16px system-ui">First scan running...</p>',
+            "fix": None}
     token = secrets.token_urlsafe(16)  # blocks other websites from POSTing /fix (CSRF)
     fixing = threading.Lock()
 
@@ -309,14 +318,17 @@ def main():
                 self.send_error(403)
                 return
             if fixing.acquire(blocking=False):
+                import sysfix  # in-process, so it also works inside the packaged .exe
+
+                buf = io.StringIO()
                 try:
-                    r = subprocess.run([sys.executable, str(HERE / "sysfix.py"), "--apply", "--config", a.config],
-                                       capture_output=True, text=True, errors="replace", timeout=600, cwd=HERE)
-                    page["fix"] = f"{dt.datetime.now():%H:%M:%S}  exit {r.returncode}\n{r.stdout}{r.stderr}".strip()
-                except subprocess.TimeoutExpired:
-                    page["fix"] = "sysfix timed out after 10 minutes."
+                    with contextlib.redirect_stdout(buf):
+                        code = sysfix.main(["--apply", "--config", a.config])
+                except SystemExit as ex:
+                    code = ex.code
                 finally:
                     fixing.release()
+                page["fix"] = f"{dt.datetime.now():%H:%M:%S}  exit {code}\n{buf.getvalue()}".strip()
                 refresh_page()
             self.send_response(303)
             self.send_header("Location", "/")

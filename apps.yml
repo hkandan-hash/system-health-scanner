@@ -50,5 +50,5 @@ apps:
   - http: http://127.0.0.1:8765/
     name: sysscan dashboard
     severity: medium
-    fix: Start-Process -WindowStyle Minimized "..\.venv\Scripts\python.exe" -ArgumentList 'sysscan.py','dashboard'
+    fix: if (Test-Path .\SystemHealthScanner.exe) { Start-Process .\SystemHealthScanner.exe -ArgumentList 'dashboard' } else { Start-Process -WindowStyle Minimized "..\.venv\Scripts\python.exe" -ArgumentList 'sysscan.py','dashboard' }
     fix_wait: 10

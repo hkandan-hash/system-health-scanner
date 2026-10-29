@@ -8,7 +8,27 @@ Checks whether a Windows machine and its apps are up and running, writes an HTML
 - **Self-healing:** `sysfix.py` reads the report, fixes what is DOWN, and re-scans to prove it worked
 - **Automation-friendly:** exit code 0 means everything is UP, 1 means something is DOWN
 
-It's two small Python files with one dependency (PyYAML), and works offline with no AI or paid services. `sysscan.py` only reads system state. `sysfix.py` changes things only when you run it with `--apply`.
+It runs as a double-click Windows app or as two small Python scripts with one dependency (PyYAML), and works offline with no AI or paid services. `sysscan.py` only reads system state. `sysfix.py` changes things only when you run it with `--apply`.
+
+## Desktop app
+
+`SystemHealthScanner.exe` is a single file and needs no Python. Double-click it: it starts the dashboard and opens it in its own window (Microsoft Edge app mode), and closing the window quits the app. On first run it creates an editable `apps.yml` and a `results` folder next to the `.exe`.
+
+The same `.exe` also works from scripts or Task Scheduler (no console output; check the exit code and `results\report.html`):
+
+```powershell
+SystemHealthScanner.exe scan            # exit 0 = all UP
+SystemHealthScanner.exe fix --apply
+SystemHealthScanner.exe dashboard       # server only, no window
+```
+
+Build it yourself:
+
+```powershell
+pip install pyinstaller
+pyinstaller --onefile --noconsole --name SystemHealthScanner --add-data "apps.yml;." app.py
+# output: dist\SystemHealthScanner.exe
+```
 
 ## How it works
 
@@ -19,7 +39,7 @@ apps.yml ──► sysscan.py scan ──► results/scan-*.json + report.html �
                                  sysfix.py --apply ──► runs fixes ──► re-scan ──► RECOVERED in report
 ```
 
-## Requirements
+## Requirements (for the Python scripts)
 
 - Windows 10 or 11 with PowerShell 5.1+
 - Python 3.9+
