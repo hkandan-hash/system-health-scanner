@@ -1,0 +1,21 @@
+# What sysscan checks. Edit this list to match your apps.
+# Each entry needs one of: service, process, port, http.
+# Optional: name (label in the report), severity (critical/high/medium/low; default high).
+
+health:
+  cpu_max: 90        # percent
+  memory_max: 90     # percent
+  disk_max: 90       # percent used
+  disks: ["C:\\"]
+
+apps:
+  - service: Winmgmt          # Windows service name (from Get-Service)
+    name: WMI service
+  - process: explorer         # process name, with or without .exe
+    name: Windows Explorer
+  - port: 135                 # TCP port; add host: <ip> for a machine you own
+    name: RPC port
+  - http: http://localhost:8080/health   # example: expected DOWN until you run something there
+    name: My web app
+    expect: 200
+    severity: critical
