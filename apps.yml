@@ -1,8 +1,9 @@
 # What sysscan checks. Edit this list to match your apps.
 # Each entry needs one of: service, process, port, http.
 # Optional: name (label in the report), severity (critical/high/medium/low; default high).
-# Optional for sysfix.py: fix (a PowerShell command that brings the entry back up) and
-# fix_wait (seconds to wait before re-checking; default 5). Services restart automatically with no fix: needed.
+# Optional for sysfix.py: fix (a PowerShell command that brings the entry back up, run from this folder) and
+# fix_wait (seconds to wait before re-checking; default 5). Services restart automatically with no fix: needed,
+# but most Windows services need sysfix to run from an admin window.
 
 health:
   cpu_max: 90        # percent
@@ -11,15 +12,43 @@ health:
   disks: ["C:\\"]
 
 apps:
-  - service: Winmgmt          # Windows service name (from Get-Service)
-    name: WMI service
-  - process: explorer         # process name, with or without .exe
-    name: Windows Explorer
-  - port: 135                 # TCP port; add host: <ip> for a machine you own
-    name: RPC port
-  - http: http://localhost:8080/health   # example: expected DOWN until you run something there
-    name: My web app
-    expect: 200
+  # Security
+  - service: WinDefend
+    name: Windows Defender
     severity: critical
-    # fix: Start-Process "C:\path\to\my-web-app.exe"
-    # fix_wait: 10
+
+  # Networking
+  - service: Wlansvc
+    name: Wi-Fi
+  - service: Dhcp
+    name: DHCP client
+  - service: Dnscache
+    name: DNS client
+
+  # Core Windows
+  - service: EventLog
+    name: Event Log
+  - service: Winmgmt
+    name: WMI
+  - process: explorer
+    name: Windows Explorer
+    fix: Start-Process explorer.exe
+
+  # Everyday apps
+  - service: Audiosrv
+    name: Windows Audio
+    severity: medium
+  - service: ClickToRunSvc
+    name: Microsoft Office service
+    severity: low
+  - process: OneDrive
+    name: OneDrive sync
+    severity: medium
+    fix: Start-Process "$env:LOCALAPPDATA\Microsoft\OneDrive\OneDrive.exe" -ArgumentList '/background'
+
+  # This tool's own dashboard (self-healing)
+  - http: http://127.0.0.1:8765/
+    name: sysscan dashboard
+    severity: medium
+    fix: Start-Process -WindowStyle Minimized "..\.venv\Scripts\python.exe" -ArgumentList 'sysscan.py','dashboard'
+    fix_wait: 10

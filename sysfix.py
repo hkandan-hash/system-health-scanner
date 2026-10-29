@@ -87,7 +87,7 @@ def main():
     log = RESULTS / "fixes.log"
     for c, cmd, _ in todo:
         try:
-            r = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=120)
+            r = subprocess.run(cmd, capture_output=True, text=True, errors="replace", timeout=120, cwd=HERE)
             ok, out = r.returncode == 0, (r.stdout + r.stderr).strip()
         except (OSError, subprocess.TimeoutExpired) as e:
             ok, out = False, str(e)
