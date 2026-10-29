@@ -51,6 +51,13 @@ DOWN     sysscan dashboard              no response (connection refused)
 
 Then `python sysfix.py --apply` relaunches the dashboard, and the re-scan shows `UP  sysscan dashboard  HTTP 200 in 18 ms`.
 
+## Dashboard
+
+`python sysscan.py dashboard` serves http://127.0.0.1:8765 and rescans every 60 s. It has:
+
+- **Fix now** button (shown when something is DOWN): runs `sysfix.py --apply`, re-scans, and shows the output under "Last fix run". The button carries a random per-session token, so other websites can't trigger it.
+- **Last 24 h** strip on every check: 48 half-hour cells, green = UP, red = DOWN in that half hour, grey = no scan.
+
 ## What the included apps.yml monitors
 
 | Group | Checks | Auto-fix |
@@ -103,7 +110,7 @@ In CI (Jenkins or GitHub Actions on a Windows runner), run `python sysscan.py sc
 
 ## Data and safety
 
-- Scans are saved as `results/scan-*.json`; the newest 200 are kept. `results/` is git-ignored.
+- Scans are saved as `results/scan-*.json`; the newest 1500 (about 24 h at 60 s) are kept. `results/` is git-ignored.
 - The dashboard binds to `127.0.0.1` only and is never exposed to the network.
 - sysscan runs only read-only commands (`Get-Service`, `Get-Process`, `Get-CimInstance`, socket and HTTP checks).
 - sysfix runs only service starts and the `fix:` commands you write yourself, and only with `--apply`.
@@ -115,7 +122,7 @@ In CI (Jenkins or GitHub Actions on a Windows runner), run `python sysscan.py sc
 | 1 | `sysfix.py --install-schedule`: one command sets up the 15-minute scan and fix | Makes self-healing automatic without copying a `schtasks` line |
 | 2 | Retry limit: stop retrying a fix after N failures and mark it `NEEDS HUMAN` | Prevents a broken fix from looping every run |
 | 3 | Alerts when something stays DOWN: Windows notification, email (SMTP) or a Teams/Slack webhook | You hear about problems without opening the dashboard |
-| 4 | Dashboard "Fix now" button and a 24-hour UP/DOWN history strip | Fix from the UI and see flapping at a glance |
+| 4 | ~~Dashboard "Fix now" button and a 24-hour UP/DOWN history strip~~ **Done** | Fix from the UI and see flapping at a glance |
 | 5 | Remote machines: services and processes on other Windows PCs you own, over WinRM (ports and HTTP already work with `host:`) | Monitor several machines from one dashboard |
 | 6 | Unit tests and a GitHub Actions workflow on `windows-latest` | Every change is verified automatically |
 | 7 | Optional AI summary of the report, run locally (Ollama), off by default | Plain-English explanations with no cost and no data leaving the machine |

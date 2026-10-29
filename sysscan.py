@@ -10,6 +10,7 @@ import ctypes
 import datetime as dt
 import html
 import json
+import secrets
 import shutil
 import socket
 import subprocess
@@ -20,13 +21,14 @@ import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs
 
 import yaml
 
 HERE = Path(__file__).resolve().parent
 RESULTS = HERE / "results"
 REPORT = RESULTS / "report.html"
-KEEP_SCANS = 200
+KEEP_SCANS = 1500  # about 24 h of history at the dashboard's 60 s interval
 SEV_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 
 # Read-only: one PowerShell call that only uses Get-* cmdlets.
@@ -184,7 +186,28 @@ def changes(cur, prev):
     return out or [f"No changes since {prev['time']}."]
 
 
-def render(cur, prev, refresh=None):
+def history(hours=24, slots=48):
+    """Per check, the worst status in each half-hour slot over the last 24 h (None = no scan)."""
+    start = time.time() - hours * 3600
+    span = hours * 3600 / slots
+    out = {}
+    for f in RESULTS.glob("scan-*.json"):
+        t = f.stat().st_mtime
+        if t < start:
+            continue
+        i = min(int((t - start) / span), slots - 1)
+        try:
+            checks = json.loads(f.read_text(encoding="utf-8"))["checks"]
+        except (OSError, ValueError, KeyError):
+            continue
+        for c in checks:
+            row = out.setdefault(c["key"], [None] * slots)
+            if row[i] != "DOWN":
+                row[i] = "UP" if c["status"] == "UP" else "DOWN"
+    return out
+
+
+def render(cur, prev, refresh=None, fix_token=None, fix_output=None):
     e = html.escape
     bad = sorted((c for c in cur["checks"] if c["status"] != "UP"),
                  key=lambda c: (SEV_ORDER.get(c["severity"], 9), c["kind"] != "health"))
@@ -193,20 +216,34 @@ def render(cur, prev, refresh=None):
     color = "#1a7f37" if not bad else "#cf222e"
     fixes = "".join(f"<li><b>{e(c['name'])}</b> <span class=sev>{e(c['severity'])}</span>: "
                     f"{e(c['detail'])}<br><code>{e(c['fix'])}</code></li>" for c in bad) or "<li>Nothing to fix.</li>"
+    hist = history()
+
+    def strip(key):
+        return "".join(f"<i class=h{s or ''}></i>" for s in hist.get(key, []))
+
     rows = "".join(f"<tr><td class={c['status']}>{c['status']}</td><td>{e(c['name'])}</td>"
-                   f"<td>{e(c['kind'])}</td><td>{e(c['detail'])}</td></tr>" for c in cur["checks"])
+                   f"<td>{e(c['kind'])}</td><td>{e(c['detail'])}</td><td class=hist>{strip(c['key'])}</td></tr>"
+                   for c in cur["checks"])
     diff = "".join(f"<li>{e(x)}</li>" for x in changes(cur, prev))
     meta = f'<meta http-equiv="refresh" content="{refresh}">' if refresh else ""
+    button = (f'<form method=post action=/fix><input type=hidden name=token value="{fix_token}">'
+              f'<button>Fix now</button> <small>runs sysfix --apply, then re-scans</small></form>'
+              if fix_token and bad else "")
+    last_fix = f"<h2>Last fix run</h2><pre>{e(fix_output)}</pre>" if fix_output else ""
     return f"""<!DOCTYPE html><html><head><meta charset="utf-8">{meta}<title>sysscan: {e(cur['host'])}</title>
 <style>body{{font:15px system-ui,sans-serif;max-width:960px;margin:2em auto;padding:0 1em;color:#1f2328}}
 h1 span{{color:{color}}} table{{border-collapse:collapse;width:100%}} td,th{{border-bottom:1px solid #d0d7de;padding:6px;text-align:left}}
 .UP{{color:#1a7f37;font-weight:600}} .DOWN,.UNKNOWN{{color:#cf222e;font-weight:600}} code{{background:#f6f8fa;padding:2px 4px}}
-.sev{{font-size:12px;background:#eee;padding:1px 6px;border-radius:8px}} li{{margin-bottom:8px}}</style></head><body>
+.sev{{font-size:12px;background:#eee;padding:1px 6px;border-radius:8px}} li{{margin-bottom:8px}}
+.hist{{white-space:nowrap}} .hist i{{display:inline-block;width:4px;height:14px;margin-right:1px;background:#eaeef2}}
+.hist i.hUP{{background:#2da44e}} .hist i.hDOWN{{background:#cf222e}}
+button{{font:600 15px system-ui;padding:8px 18px;background:#1f6feb;color:#fff;border:0;border-radius:6px;cursor:pointer}}
+pre{{background:#f6f8fa;padding:10px;overflow-x:auto;font-size:13px}}</style></head><body>
 <h1>{e(cur['host'])}: <span>{overall}</span></h1>
 <p>Scanned {e(cur['time'])} · {up}/{len(cur['checks'])} checks up · machine up {cur['uptime_hours']} h</p>
-<h2>Fix first</h2><ol>{fixes}</ol>
+<h2>Fix first</h2><ol>{fixes}</ol>{button}{last_fix}
 <h2>Changes since last scan</h2><ul>{diff}</ul>
-<h2>All checks</h2><table><tr><th>Status</th><th>Check</th><th>Type</th><th>Detail</th></tr>{rows}</table>
+<h2>All checks</h2><table><tr><th>Status</th><th>Check</th><th>Type</th><th>Detail</th><th>Last 24 h</th></tr>{rows}</table>
 </body></html>"""
 
 
@@ -241,14 +278,20 @@ def main():
         sys.exit(0 if all(c["status"] == "UP" for c in cur["checks"]) else 1)
 
     # dashboard: rescan in the background, serve the latest report on localhost only
-    page = {"html": "<p>First scan running...</p>"}
+    page = {"html": "<p>First scan running...</p>", "fix": None}
+    token = secrets.token_urlsafe(16)  # blocks other websites from POSTing /fix (CSRF)
+    fixing = threading.Lock()
+
+    def refresh_page():
+        cur, prev = saved_scans()
+        if cur:
+            page["html"] = render(cur, prev, refresh=a.interval, fix_token=token, fix_output=page["fix"])
+            REPORT.write_text(render(cur, prev), encoding="utf-8")
 
     def loop():
         while True:
-            cur = scan(load_cfg(a.config))
-            _, prev = saved_scans()
-            page["html"] = render(cur, prev, refresh=a.interval)
-            REPORT.write_text(render(cur, prev), encoding="utf-8")
+            scan(load_cfg(a.config))
+            refresh_page()
             time.sleep(a.interval)
 
     class Handler(BaseHTTPRequestHandler):
@@ -258,6 +301,26 @@ def main():
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.end_headers()
             self.wfile.write(body)
+
+        def do_POST(self):
+            n = int(self.headers.get("Content-Length", 0))
+            sent = parse_qs(self.rfile.read(min(n, 1024)).decode("utf-8", "replace")).get("token", [""])[0]
+            if self.path != "/fix" or not secrets.compare_digest(sent, token):
+                self.send_error(403)
+                return
+            if fixing.acquire(blocking=False):
+                try:
+                    r = subprocess.run([sys.executable, str(HERE / "sysfix.py"), "--apply", "--config", a.config],
+                                       capture_output=True, text=True, errors="replace", timeout=600, cwd=HERE)
+                    page["fix"] = f"{dt.datetime.now():%H:%M:%S}  exit {r.returncode}\n{r.stdout}{r.stderr}".strip()
+                except subprocess.TimeoutExpired:
+                    page["fix"] = "sysfix timed out after 10 minutes."
+                finally:
+                    fixing.release()
+                refresh_page()
+            self.send_response(303)
+            self.send_header("Location", "/")
+            self.end_headers()
 
         def log_message(self, *args):
             pass
