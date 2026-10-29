@@ -10,7 +10,9 @@ Fixes:
   health (CPU/memory/disk) -> not auto-fixed; shown as manual
 """
 import argparse
+import contextlib
 import datetime as dt
+import io
 import json
 import subprocess
 import sys
@@ -43,12 +45,31 @@ def fixes_from_config(path):
     return out
 
 
-def plan(scan, items):
+STATE = RESULTS / "fix-state.json"  # consecutive failed fix attempts per check
+MAX_TRIES = 3
+TASK = "SystemHealthScanner"
+
+
+def load_state():
+    try:
+        return json.loads(STATE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def plan(scan, items, state=None):
+    """Split DOWN checks into auto-fixable and manual. A check whose fix failed MAX_TRIES times
+    in a row becomes manual (NEEDS HUMAN) until it is UP again."""
+    state = load_state() if state is None else state
     todo, manual = [], []
     bad = sorted((c for c in scan["checks"] if c["status"] != "UP"),
                  key=lambda c: SEV_ORDER.get(c["severity"], 9))
     for c in bad:
         item = items.get(c["key"], {})
+        tries = int(item.get("max_tries", MAX_TRIES))
+        if state.get(c["key"], 0) >= tries:
+            manual.append({**c, "fix": f"NEEDS HUMAN: auto-fix failed {tries} times in a row. {c['fix']}"})
+            continue
         if item.get("fix"):
             cmd = ["powershell", "-NoProfile", "-NonInteractive", "-Command", str(item["fix"])]
         elif c["kind"] == "service":
@@ -69,7 +90,17 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="Fix what the latest sysscan report shows as DOWN.")
     ap.add_argument("--apply", action="store_true", help="actually run the fixes")
     ap.add_argument("--config", default=str(HERE / "apps.yml"))
+    ap.add_argument("--scan", action="store_true", help="run a fresh scan first instead of using the last report")
+    ap.add_argument("--install-schedule", type=int, metavar="MINUTES",
+                    help="create a Windows scheduled task that runs --scan --apply every N minutes")
+    ap.add_argument("--uninstall-schedule", action="store_true", help="remove that scheduled task")
     a = ap.parse_args(argv)
+
+    if a.install_schedule or a.uninstall_schedule:
+        return schedule(a.install_schedule)
+    if a.scan:
+        with contextlib.redirect_stdout(io.StringIO()):
+            sysscan.run_scan(a.config)
 
     scan = latest_scan()
     todo, manual = plan(scan, fixes_from_config(a.config))
@@ -99,7 +130,35 @@ def main(argv=None):
 
     time.sleep(max(w for _, _, w in todo))
     print("\nRe-scanning to verify...")
-    return sysscan.run_scan(a.config)
+    code = sysscan.run_scan(a.config)
+
+    # Count consecutive failures; a check that is UP (fixed by us or by hand) starts over.
+    state, after = load_state(), {c["key"]: c["status"] for c in latest_scan()["checks"]}
+    for c, _, _ in todo:
+        if after.get(c["key"]) != "UP":
+            state[c["key"]] = state.get(c["key"], 0) + 1
+    state = {k: n for k, n in state.items() if after.get(k) != "UP"}
+    STATE.write_text(json.dumps(state, indent=2), encoding="utf-8")
+    return code
+
+
+def schedule(minutes):
+    """Install or remove the Windows scheduled task (runs as the current user)."""
+    if not minutes:
+        r = subprocess.run(["schtasks", "/Delete", "/TN", TASK, "/F"], capture_output=True, text=True, errors="replace")
+        print(r.stdout.strip() or r.stderr.strip())
+        return r.returncode
+    if getattr(sys, "frozen", False):
+        cmd = f'"{sys.executable}" fix --scan --apply'
+    else:
+        py = Path(sys.executable).with_name("pythonw.exe")  # no console window every run
+        cmd = f'"{py if py.exists() else sys.executable}" "{HERE / "sysfix.py"}" --scan --apply'
+    r = subprocess.run(["schtasks", "/Create", "/SC", "MINUTE", "/MO", str(minutes), "/TN", TASK, "/TR", cmd, "/F"],
+                       capture_output=True, text=True, errors="replace")
+    print(r.stdout.strip() or r.stderr.strip())
+    if r.returncode == 0:
+        print(f"Every {minutes} min: {cmd}\nRemove with: --uninstall-schedule")
+    return r.returncode
 
 
 if __name__ == "__main__":

@@ -14,7 +14,7 @@ It runs as a double-click Windows app or as two small Python scripts with one de
 
 ## Desktop app
 
-`SystemHealthScanner.exe` is a single file and needs no Python. Double-click it: it starts the dashboard and opens it in its own window (Microsoft Edge app mode), and closing the window quits the app. On first run it creates an editable `apps.yml` and a `results` folder next to the `.exe`.
+`SystemHealthScanner.exe` is a single file and needs no Python. Double-click it: it opens the live dashboard (below) in its own window (Microsoft Edge app mode), and closing the window quits the app. On first run it creates an editable `apps.yml` and a `results` folder next to the `.exe`.
 
 The same `.exe` also works from scripts or Task Scheduler (no console output; check the exit code and `results\report.html`):
 
@@ -55,7 +55,7 @@ pip install -r requirements.txt
 ```powershell
 python sysscan.py scan        # run checks, write results\report.html
 python sysscan.py report      # rebuild the report from the last scan
-python sysscan.py dashboard   # http://127.0.0.1:8765, rescans every 60 s
+python sysscan.py dashboard   # http://127.0.0.1:8765, live, scans every 15 s
 python sysscan.py dashboard --interval 30 --port 9000
 
 python sysfix.py              # dry run: shows what it would fix and changes nothing
@@ -75,10 +75,23 @@ Then `python sysfix.py --apply` relaunches the dashboard, and the re-scan shows 
 
 ## Dashboard
 
-`python sysscan.py dashboard` serves http://127.0.0.1:8765 and rescans every 60 s. It has:
+A live view: it scans every 15 s, the page updates every 3 s with no reload, and it follows the Windows light/dark theme.
 
-- **Fix now** button (shown when something is DOWN): runs `sysfix.py --apply`, re-scans, and shows the output under "Last fix run". The button carries a random per-session token, so other websites can't trigger it.
-- **Last 24 h** strip on every check: 48 half-hour cells, green = UP, red = DOWN in that half hour, grey = no scan.
+| Part | What it shows |
+|---|---|
+| **Live indicator** | "Live · last scan 8s ago" with a pulsing dot; "Disconnected" if the app stops |
+| **Status tile** | ✔ ALL UP or ✖ N DOWN |
+| **Checks up** | e.g. 13 / 14, and which ones are down |
+| **Availability, 24 h** | % of scans where everything was UP |
+| **Incidents, 24 h** | how many times a check went from UP to DOWN |
+| **Per-check table** | status, detail, 24 h uptime %, incidents, and a 48-cell history strip (30 min per cell; hover for the time range) |
+
+Buttons:
+- **Scan now:** scan immediately.
+- **Fix now (N):** run sysfix on the N auto-fixable problems, re-scan, and show the output under "Last fix run". Disabled when nothing fixable is DOWN.
+- **Report:** open the static HTML report.
+
+Security: it listens on `127.0.0.1` only. Buttons need a per-session token, so other websites can't trigger them, and requests with a foreign `Host` header are rejected (DNS-rebinding protection). JSON API: `GET /api/status`, `POST /api/scan`, `POST /api/fix`.
 
 ## What the included apps.yml monitors
 
@@ -120,19 +133,24 @@ apps:
 
 `fix:` is a PowerShell command, run from this folder, so relative paths work. Services need no `fix:` because sysfix restarts them. Every fix attempt is logged to `results/fixes.log`.
 
+**Retry limit:** if a check is still DOWN after its fix ran 3 times in a row, sysfix stops trying and lists it as `NEEDS HUMAN`. It starts over once the check is UP again, whether fixed by hand or otherwise. Set `max_tries: N` on an entry to change the limit. State lives in `results/fix-state.json`.
+
 ## Schedule it
 
-Scan and self-heal every 15 minutes with Task Scheduler:
+One command creates a Windows scheduled task that scans and self-heals every N minutes as your user, with no console window:
 
 ```powershell
-schtasks /Create /SC MINUTE /MO 15 /TN sysfix /TR "cmd /c python C:\path\to\sysscan.py scan & python C:\path\to\sysfix.py --apply"
+python sysfix.py --install-schedule 15      # or: SystemHealthScanner.exe fix --install-schedule 15
+python sysfix.py --uninstall-schedule
 ```
+
+`--scan` (used by the task) runs a fresh scan before fixing, instead of using the last report.
 
 In CI (Jenkins or GitHub Actions on a Windows runner), run `python sysscan.py scan`. A non-zero exit fails the job; publish `results/report.html` as an artifact.
 
 ## Data and safety
 
-- Scans are saved as `results/scan-*.json`; the newest 1500 (about 24 h at 60 s) are kept. `results/` is git-ignored.
+- Scans are saved as `results/scan-*.json`; the newest 6000 (about 24 h at 15 s) are kept. `results/` is git-ignored.
 - The dashboard binds to `127.0.0.1` only and is never exposed to the network.
 - sysscan runs only read-only commands (`Get-Service`, `Get-Process`, `Get-CimInstance`, socket and HTTP checks).
 - sysfix runs only service starts and the `fix:` commands you write yourself, and only with `--apply`.
@@ -141,8 +159,8 @@ In CI (Jenkins or GitHub Actions on a Windows runner), run `python sysscan.py sc
 
 | # | Feature | Why |
 |---|---|---|
-| 1 | `sysfix.py --install-schedule`: one command sets up the 15-minute scan and fix | Makes self-healing automatic without copying a `schtasks` line |
-| 2 | Retry limit: stop retrying a fix after N failures and mark it `NEEDS HUMAN` | Prevents a broken fix from looping every run |
+| 1 | ~~`sysfix.py --install-schedule`: one command sets up the 15-minute scan and fix~~ **Done** | Makes self-healing automatic without copying a `schtasks` line |
+| 2 | ~~Retry limit: stop retrying a fix after N failures and mark it `NEEDS HUMAN`~~ **Done** | Prevents a broken fix from looping every run |
 | 3 | Alerts when something stays DOWN: Windows notification, email (SMTP) or a Teams/Slack webhook | You hear about problems without opening the dashboard |
 | 4 | ~~Dashboard "Fix now" button and a 24-hour UP/DOWN history strip~~ **Done** | Fix from the UI and see flapping at a glance |
 | 5 | Remote machines: services and processes on other Windows PCs you own, over WinRM (ports and HTTP already work with `host:`) | Monitor several machines from one dashboard |
