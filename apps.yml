@@ -1,6 +1,8 @@
 # What sysscan checks. Edit this list to match your apps.
 # Each entry needs one of: service, process, port, http.
 # Optional: name (label in the report), severity (critical/high/medium/low; default high).
+# Optional for sysfix.py: fix (a PowerShell command that brings the entry back up) and
+# fix_wait (seconds to wait before re-checking; default 5). Services restart automatically with no fix: needed.
 
 health:
   cpu_max: 90        # percent
@@ -19,3 +21,5 @@ apps:
     name: My web app
     expect: 200
     severity: critical
+    # fix: Start-Process "C:\path\to\my-web-app.exe"
+    # fix_wait: 10

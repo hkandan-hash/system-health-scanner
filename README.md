@@ -49,12 +49,37 @@ apps:
     severity: critical                    # critical / high / medium / low
 ```
 
+## Auto-fix with sysfix
+
+`sysfix.py` reads the latest sysscan report and fixes what is DOWN, most severe first. It then re-runs sysscan to verify, so the report's "Changes since last scan" shows what RECOVERED.
+
+```powershell
+python sysfix.py            # dry run: shows what it would fix and changes nothing
+python sysfix.py --apply    # run the fixes, then re-scan (exit 0 = all UP)
+```
+
+| Problem | Fix |
+|---|---|
+| Service down | `sc.exe start <name>`, automatic (most services need an admin window) |
+| Process, port or HTTP down | the `fix:` command on that entry in `apps.yml` |
+| CPU, memory or disk over limit | not auto-fixed; listed as MANUAL with advice |
+
+```yaml
+  - http: http://localhost:8080/health
+    fix: Start-Process "C:\path\to\my-web-app.exe"
+    fix_wait: 10        # seconds before re-checking
+```
+
+Every fix attempt is logged to `results/fixes.log`.
+
 ## Schedule it
 
 Every 15 minutes with Task Scheduler:
 
 ```powershell
 schtasks /Create /SC MINUTE /MO 15 /TN sysscan /TR "python C:\path\to\sysscan.py scan"
+# scan and self-heal every 15 minutes:
+schtasks /Create /SC MINUTE /MO 15 /TN sysfix /TR "cmd /c python C:\path\to\sysscan.py scan & python C:\path\to\sysfix.py --apply"
 ```
 
 In CI (Jenkins or GitHub Actions on a Windows runner), run `python sysscan.py scan`. A non-zero exit fails the job; publish `results/report.html` as an artifact.
