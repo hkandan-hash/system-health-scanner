@@ -2,6 +2,8 @@
 
 Checks whether a Windows machine and its apps are up and running, writes an HTML report, serves a local dashboard, and can fix what is DOWN automatically.
 
+**[⬇ Download SystemHealthScanner.exe](https://github.com/hkandan-hash/system-health-scanner/releases/latest/download/SystemHealthScanner.exe)**: Windows 10/11, no install, no Python needed.
+
 - **Health:** CPU, memory and disk usage against limits you set
 - **Apps intact:** Windows services, processes, TCP ports and HTTP endpoints, each reported UP or DOWN
 - **Report:** overall status, what to fix first (by severity), changes since the last scan, and all checks
